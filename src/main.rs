@@ -1,15 +1,29 @@
+const C8_SCREEN_WIDTH: usize = 64;
+const C8_SCREEN_HEIGTH: usize = 32;
+
 fn main() {
     let mut chip = Chip8::new();
+    chip.execute_instruction(0x60FF);
+    chip.execute_instruction(0x61F0);
+    chip.execute_instruction(0x62AB);
+    chip.execute_instruction(0x63CD);
+    chip.execute_instruction(0x6537);
     chip.print_debug();
-    chip.execute_instruction(0x700A);
+    chip.execute_instruction(0xA200);
     chip.print_debug();
-    chip.execute_instruction(0x8006);
+    chip.execute_instruction(0xF555);
     chip.print_debug();
-    chip.execute_instruction(0x8006);
-    chip.print_debug();
-    chip.execute_instruction(0x8006);
-    chip.print_debug();
-    chip.print_slice_mem(0, 0x50);
+    chip.print_slice_mem(0x0200, 10);
+
+    let ms = [[0;0];0];//chip.screen_memory;
+    for row in &ms[..]
+    {
+        for bit in &row[..]
+        {
+            print!("{}", *bit as u8);
+        }
+        println!("");
+    }
 }
 
 struct Chip8
@@ -19,6 +33,10 @@ struct Chip8
     program_counter: usize,
     stack_pointer: usize,
     stack: [usize; 0x10],
+    index: usize,
+    screen_memory: [[bool; C8_SCREEN_WIDTH]; C8_SCREEN_HEIGTH], // 64*32 screen
+    dt: u8,
+    st: u8,
 }
 
 impl Chip8
@@ -31,7 +49,11 @@ impl Chip8
             registers: [0; 0x10],
             program_counter: 0x200,
             stack_pointer: 0x0,
-            stack: [0; 0x10]
+            stack: [0; 0x10],
+            index: 0,
+            screen_memory: [[false; C8_SCREEN_WIDTH]; C8_SCREEN_HEIGTH],
+            dt: 0,
+            st: 0,
         };
         let hex_digits = [0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
                                 0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -50,19 +72,19 @@ impl Chip8
                                 0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
                                 0xF0, 0x80, 0xF0, 0x80, 0x80, // F
                                 ];
-        (&mut new_chip.mem[..hex_digits.len()]).copy_from_slice(&hex_digits);
+        (&mut new_chip.mem[0..hex_digits.len()]).copy_from_slice(&hex_digits);
         new_chip
     }
     pub fn print_debug(&self)
     {
-        println!("Chip8 {{ registers: {:X?} program_counter: {:X?} stack_pointer: {:X?} stack {:X?} }}",
-                    self.registers, self.program_counter, self.stack_pointer, self.stack);
+        println!("Chip8 {{ registers:{:X?} program_counter:{:X?} stack_pointer:{:X?} stack:{:X?} index:{:X?}}}",
+                    self.registers, self.program_counter, self.stack_pointer, self.stack, self.index);
     }
     pub fn print_slice_mem(&self, a: usize, b: usize)
     {
-        for (index, value) in (&self.mem[a..b]).iter().enumerate()
+        for (index, value) in (&self.mem[a..(b + a)]).iter().enumerate()
         {
-                println!("{:#X}: {:#X}", index, value);
+                println!("{:#X}: {:#X}", index + a, value);
         }
     }
     fn fetch_instruction(&self) -> u16
@@ -74,16 +96,11 @@ impl Chip8
 
     }
 
-    pub fn get_mem_value(&self, index: usize) -> u8
-    {
-        self.mem[index]
-    }
-
     fn get_addr(n1: u8, n2: u8, n3: u8) -> usize
     {
-        (((n1 as usize) << 8) |
+        ((n1 as usize) << 8) |
         ((n2 as usize) << 4) |
-        (n3 as usize))
+        (n3 as usize)
     }
 
     fn get_kk(k1: u8, k2: u8) -> u8
@@ -103,12 +120,15 @@ impl Chip8
         match instruction
         {
             //00E0: CLS
-            (0, 0, 0xE, 0) => (),//TODO: CLEAR_SCREEN
-
+            (0, 0, 0xE, 0) =>
+            {
+                self.screen_memory = [[false; C8_SCREEN_WIDTH]; C8_SCREEN_HEIGTH];
+            }
             //00EE: RET
             (0, 0, 0xE, 0xE) =>
             {
-                ;
+                self.program_counter = self.stack[self.stack_pointer];
+                self.stack_pointer -= 1;
             }
             //1nnn: JP addr
             (1, n1, n2, n3) =>
@@ -123,7 +143,7 @@ impl Chip8
                 self.program_counter = Chip8::get_addr(n1, n2, n3) as usize;
             }
             //3xkk SE Vx, byte
-         (3, x, k1, k2) =>
+            (3, x, k1, k2) =>
             {
                 if self.registers[x as usize] == Chip8::get_kk(k1, k2)
                     {self.program_counter += 2;}
@@ -213,12 +233,153 @@ impl Chip8
                     { self.program_counter += 2; }
             }
             //Annn LD I, addr
-            ()
+            (0xA, n1, n2, n3) =>
+            {
+                self.index = Chip8::get_addr(n1, n2, n3);
+            }
+            //Bnnn JP V0, addr
+            (0xB, n1, n2, n3) =>
+            {
+                self.program_counter = Chip8::get_addr(n1, n2, n3) + self.registers[0x0] as usize;
+            }
+            //Cxkk RND Vx, byte
+            (0xC, x, k1, k2) =>
+            {
+                self.registers[x as usize] =
+                    rand::random::<u8>() & Chip8::get_kk(k1, k2);
+            }
+            //Dxyn DRw Vx, Vy, nibble
+            (0xD, x, y, n) =>
+            {
+                // Get the x and y values from the registers
+                let initial_x = self.registers[x as usize] as usize;
+                let initial_y = self.registers[y as usize] as usize;
+
+                let mut flag: u8 = 0;
+
+                // Iterate through rows (index) to (index + n) byte index indicates the byte from
+                // memory which will drawn
+                for (y_offset, byte_index) in (self.index..(n as usize + self.index)).enumerate()
+                {
+                    // Iterate through the bits in the sprite byte
+                    let byte = BitIteratoru8::new(self.mem[byte_index]);
+                    for (x_offset, bit) in byte.enumerate()
+                    {
+                        // Adding the offset to the initial coords
+                        let x: usize = (initial_x + x_offset) % C8_SCREEN_WIDTH as usize;
+                        let y: usize = (initial_y + y_offset) % C8_SCREEN_HEIGTH as usize;
+                        // If bits are overlapped, set VF to 1
+                        if self.screen_memory[y][x] & bit
+                        {
+                            flag = 1;
+                        }
+                        self.screen_memory[y][x] ^= bit;
+                    }
+                }
+                self.registers[0xF] = flag;
+            }
+            //Ex9E SKP Vx: TODO
+            (0xE, x, 0x9, 0xE) =>
+            {
+                ()
+            }
+            //Ex9E SKNP Vx: TODO
+            (0xE, x, 0xA, 0x1) =>
+            {
+                ()
+            }
+            //Fx07 LD Vx, DT
+            (0xF, x, 0x0, 0x7) =>
+            {
+                self.registers[x as usize] = self.dt;
+            }
+            //Fx0A LD Vx, KeyPress: TODO
+            (0xF, x, 0x0, 0xA) =>
+            {
+                ()
+            }
+            //Fx15 LD DT, Vx
+            (0xF, x, 0x1, 0x5) =>
+            {
+                self.dt = self.registers[x as usize];
+            }
+            //Fx18 LD ST, Vx
+            (0xF, x, 0x1, 0x8) =>
+            {
+                self.st = self.registers[x as usize];
+            }
+            //Fx1E ADD I, Vx
+            (0xF, x, 0x1, 0xE) =>
+            {
+                self.index = self.index + self.registers[x as usize] as usize;
+            }
+            //Fx29 LD F, Vx
+            (0xF, x, 0x2, 0x9) =>
+            {
+                self.index = self.registers[x as usize] as usize * 5;
+            }
+            //Fx33 LD B, Vx
+            (0xF, x, 0x3, 0x3) =>
+            {
+                let hundreds_digit = self.registers[x as usize] / 100;
+                let tens_digits = (self.registers[x as usize] - hundreds_digit * 100) / 10;
+                let ones_digits = self.registers[x as usize] - tens_digits * 10 - hundreds_digit * 100;
+                self.mem[self.index] = hundreds_digit;
+                self.mem[self.index + 1] = tens_digits;
+                self.mem[self.index + 2] = ones_digits;
+            }
+            //Fx55 LD [I]. Vx
+            (0xF, x, 0x5, 0x5) =>
+            {
+                for i in 0..=x
+                {
+                    let i = i as usize;
+                    self.mem[i + self.index] = self.registers[i];
+                }
+            }
+            //Fx65 LD Vx, [I]
+            (0xF, x, 0x6, 0x5) =>
+            {
+                for i in 0..=x
+                {
+                    let i = i as usize;
+                    self.registers[i] = self.mem[i + self.index];
+                }
+            }
             _ =>
             {
                 println!("Unrecognized instruction: {:?}", preinstruction);
             }
         }
+    }
+}
+
+struct BitIteratoru8
+{
+    count: usize,
+    byte: u8,
+}
+impl BitIteratoru8
+{
+    pub fn new(byte: u8) -> BitIteratoru8
+    {
+        BitIteratoru8 {count: 0, byte}
+    }
+}
+
+impl Iterator for BitIteratoru8
+{
+    type Item = bool;
+
+    fn next(&mut self) -> Option<Self::Item>
+    {
+        if self.count > 7
+        {
+            return None;
+        }
+        let bit = (self.byte >> (7 - self.count)) & 1;
+        self.count += 1;
+        Some(bit == 1)
     }
 }
 
