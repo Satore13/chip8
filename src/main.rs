@@ -24,14 +24,16 @@ fn load_rom(rom_name: String) -> Result<[u8; 0xE00], std::io::Error>
 fn main()
 {
     let mut rom_name = String::new();
-    {  // this block limits scope of borrows by ap.refer() method
+    {
+        // this block limits scope of borrows by ap.refer() method
         let mut ap = ArgumentParser::new();
         ap.set_description("Chip-8 interpreter by Satore");
         ap.refer(&mut rom_name)
             .add_argument("ROM", Store,
-            "File containing the rom").required();
-        ap.parse_args_or_exit();
+                "File containing the rom").required();
+                ap.parse_args_or_exit();
     }
+
 
     match load_rom(rom_name)
     {

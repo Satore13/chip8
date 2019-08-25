@@ -45,6 +45,7 @@ pub struct Chip8
     st: u8,
     window: Window,
     waiting_for_key: Option<u8>,
+    draw: bool,
 }
 
 impl Chip8
@@ -72,6 +73,7 @@ impl Chip8
                                         scale: SCALE
                                     }).expect("Couldn't create window"),
             waiting_for_key: None,
+            draw: false,
         };
         let hex_digits = [0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
                                 0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -117,7 +119,7 @@ impl Chip8
         buffer
     }
 
-    pub fn auto_run(&mut self) 
+    pub fn auto_run(&mut self)
     {
         let mut previous_draw_instant = Instant::now();
         let mut previous_update_instant = Instant::now();
@@ -155,8 +157,14 @@ impl Chip8
             {
                 self.dt = if self.dt > 0 { self.dt - 1} else { 0 };
                 self.st = if self.st > 0 { self.st - 1} else { 0 };
-                self.window.update_with_buffer(&self.get_screen_buffer()).expect("Couldn't update screen");
-                previous_draw_instant = Instant::now();
+                if self.draw
+                {
+                    self.window.update_with_buffer(&self.get_screen_buffer()).expect("Couldn't update screen");
+                    previous_draw_instant = Instant::now();
+                }else
+                {
+                    self.window.update();
+                }
             }
         }
     }
@@ -364,6 +372,7 @@ impl Chip8
                     }
                 }
                 self.registers[0xF] = flag;
+                self.draw = true;
             }
             //Ex9E SKP Vx
             (0xE, x, 0x9, 0xE) =>
