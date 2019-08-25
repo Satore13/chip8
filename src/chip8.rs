@@ -44,7 +44,7 @@ pub struct Chip8
     dt: u8,
     st: u8,
     window: Window,
-    waiting_for_key: (bool, u8),
+    waiting_for_key: Option<u8>,
 }
 
 impl Chip8
@@ -55,7 +55,7 @@ impl Chip8
         {
             mem: [0; 0x1000],
             registers: [0; 0x10],
-            program_counter: 0x200 - 2,
+            program_counter: 0x200,
             stack_pointer: 0x0,
             stack: [0; 0x10],
             index: 0,
@@ -71,7 +71,7 @@ impl Chip8
                                         resize: false,
                                         scale: SCALE
                                     }).expect("Couldn't create window"),
-            waiting_for_key: (false, 0x0),
+            waiting_for_key: None,
         };
         let hex_digits = [0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
                                 0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -117,7 +117,7 @@ impl Chip8
         buffer
     }
 
-    pub fn auto_run(&mut self)
+    pub fn auto_run(&mut self) 
     {
         let mut previous_draw_instant = Instant::now();
         let mut previous_update_instant = Instant::now();
@@ -126,26 +126,26 @@ impl Chip8
             //Update at 500hz
             if Instant::now().duration_since(previous_update_instant) > Duration::from_millis(1)
             {
-                if !self.waiting_for_key.0
+                if let Some(keycode) = self.waiting_for_key
                 {
-                    let instruction = self.fetch_instruction();
-                    self.program_counter += 2;
-                    self.execute_instruction(instruction);
-                }
-                else
-                {
-                    self.window.update();
                     if let Some(keys) = self.window.get_keys_pressed(KeyRepeat::No)
                     {
                         if let Some(key) = (*keys).iter().next()
                         {
                             if let Some(hexcode) = get_hexcode_from_key(*key)
                             {
-                                self.registers[self.waiting_for_key.1 as usize] = hexcode;
-                                self.waiting_for_key.0 = false;
+                                self.registers[keycode as usize] = hexcode;
+                                self.waiting_for_key = None;
                             }
                         }
                     }
+                }
+                else
+                {
+
+                    let instruction = self.fetch_instruction();
+                    self.program_counter += 2;
+                    self.execute_instruction(instruction);
                 }
                 previous_update_instant = Instant::now();
             }
@@ -403,7 +403,7 @@ impl Chip8
             //Fx0A LD Vx, KeyPress
             (0xF, x, 0x0, 0xA) =>
             {
-                self.waiting_for_key = (true, x);
+                self.waiting_for_key = Some(x);
             }
             //Fx15 LD DT, Vx
             (0xF, x, 0x1, 0x5) =>
