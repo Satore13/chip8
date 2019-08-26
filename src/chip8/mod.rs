@@ -10,10 +10,10 @@ pub use error::*;
 
 
 const KEY_CODES: [(u8, Key);16] =
-                                [(0x1, Key::Key1), (0x2, Key::Key2), (0x3, Key::Key3), (0xC, Key::Key4),
-                                (0x4, Key::Q), (0x5, Key::W), (0x6, Key::E), (0xD, Key::R),
-                                (0x7, Key::A), (0x8, Key::S), (0x9, Key::D), (0xE, Key::F),
-                                (0xA, Key::Z), (0x0, Key::X), (0xB, Key::C), (0xF, Key::V),];
+                        [(0x1, Key::Key1), (0x2, Key::Key2), (0x3, Key::Key3), (0xC, Key::Key4),
+                        (0x4, Key::Q), (0x5, Key::W), (0x6, Key::E), (0xD, Key::R),
+                        (0x7, Key::A), (0x8, Key::S), (0x9, Key::D), (0xE, Key::F),
+                        (0xA, Key::Z), (0x0, Key::X), (0xB, Key::C), (0xF, Key::V),];
 
 fn get_hexcode_from_key(key: Key) -> Option<u8>
 {
@@ -176,7 +176,14 @@ impl Chip8
 
                     let instruction = self.fetch_instruction();
                     self.program_counter += 2;
-                    self.execute_instruction(instruction)?;
+                    if self.program_counter >= 4096
+                    {
+                        bail!("program_counter can't be bigger than 4096");
+                    }
+                    self.execute_instruction(instruction)
+                                    .chain_err(||
+                                        format!("Error executing instruction {:#06X} at {:#06X}"
+                                            , instruction, self.program_counter - 2))?;
                 }
                 previous_update_instant = Instant::now();
             }
@@ -199,28 +206,6 @@ impl Chip8
         }
         Ok(())
     }
-
-    fn get_v_register_mut(&mut self, index: usize) -> Result<&mut u8>
-    {
-        if index > 16
-        {
-            bail!("Attempting to acces invalid v_register");
-        }
-
-        Ok(&mut self.v_registers[index])
-    }
-
-
-    fn get_v_register(&self, index: usize) -> Result<u8>
-    {
-        if index > 16
-        {
-            bail!("Attempting to acces invalid v_register");
-        }
-
-        Ok(self.v_registers[index])
-    }
-
 
     #[inline]
     fn get_addr(n1: u8, n2: u8, n3: u8) -> usize
@@ -248,268 +233,265 @@ impl Chip8
             (preinstruction & 0x000F) as u8)
         };
 
-        let mut process_instruction = || -> Result<()> {
-            match instruction
+        match instruction
+        {
+            //00E0: CLS
+            (0, 0, 0xE, 0) =>
             {
-                //00E0: CLS
-                (0, 0, 0xE, 0) =>
+                self.screen_memory = [[false; C8_SCREEN_WIDTH]; C8_SCREEN_HEIGTH];
+            }
+            //00EE: RET
+            (0, 0, 0xE, 0xE) =>
+            {
+                self.program_counter = self.stack[self.stack_pointer];
+                self.stack_pointer -= 1;
+            }
+            //1nnn: JP addr
+            (1, n1, n2, n3) =>
+            {
+                self.program_counter = Chip8::get_addr(n1, n2, n3) as usize;
+            }
+            //2nnn: CALL addr
+            (2, n1, n2, n3) =>
+            {
+                if self.stack_pointer >= 15
                 {
-                    self.screen_memory = [[false; C8_SCREEN_WIDTH]; C8_SCREEN_HEIGTH];
+                    bail!("Stack is full");
                 }
-                //00EE: RET
-                (0, 0, 0xE, 0xE) =>
-                {
-                    self.program_counter = self.stack[self.stack_pointer];
-                    self.stack_pointer -= 1;
-                }
-                //1nnn: JP addr
-                (1, n1, n2, n3) =>
-                {
-                    self.program_counter = Chip8::get_addr(n1, n2, n3) as usize;
-                }
-                //2nnn: CALL addr
-                (2, n1, n2, n3) =>
-                {
-                    self.stack_pointer += 1;
-                    self.stack[self.stack_pointer] = self.program_counter;
-                    self.program_counter = Chip8::get_addr(n1, n2, n3) as usize;
-                }
-                //3xkk SE Vx, byte
-                (3, x, k1, k2) =>
-                {
-                    if self.get_v_register(x as usize)? == Chip8::get_kk(k1, k2)
-                        {self.program_counter += 2;}
-                }
-                //4xkk SNE Vx, byte
-                (4, x, k1, k2) =>
-                {
-                    if self.v_registers[x as usize] != Chip8::get_kk(k1, k2)
-                        {self.program_counter += 2;}
-                }
-                //5xy0 SE Vx, Vy
-                (5, x, y, 0) =>
-                {
-                    if self.v_registers[x as usize] == self.v_registers[y as usize]
-                        {self.program_counter += 2;}
-                }
-                //6xkk LD Vx, byte
-                (6, x, k1, k2) =>
-                {
-                    self.v_registers[x as usize] = Chip8::get_kk(k1, k2);
-                }
-                //7xkk ADD Vx, byte
-                (7, x, k1, k2) =>
-                {
-                    self.v_registers[x as usize] =
-                        self.v_registers[x as usize].wrapping_add(Chip8::get_kk(k1, k2));
-                }
-                //8xy0 LD Vx, Vy
-                (8, x, y, 0) =>
-                {
-                    self.v_registers[x as usize] = self.v_registers[y as usize];
-                }
-                //8xy1 OR Vx, Vy
-                (8, x, y, 1) =>
-                {
-                    self.v_registers[x as usize] |= self.v_registers[y as usize];
-                }
-                //8xy2 AND Vx, Vy
-                (8, x, y, 2) =>
-                {
-                    self.v_registers[x as usize] &= self.v_registers[y as usize];
-                }
-                //8xy3 XOR Vx, Vy
-                (8, x, y, 3) =>
-                {
-                    self.v_registers[x as usize] ^= self.v_registers[y as usize];
-                }
-                //8xy4 ADD Vx, Vy, VF = carry
-                (8, x, y, 4) =>
-                {
-                    let r = self.v_registers[x as usize].overflowing_add(self.v_registers[y as usize]);
-                    self.v_registers[x as usize] = r.0;
-                    self.v_registers[0xF] = r.1 as u8;
-                }
-                //8xy5 SUB Vx, Vy, VF = NOT borrow (overflow)
-                (8, x, y, 5) =>
-                {
-                    self.v_registers[0xF] =
-                        (self.v_registers[x as usize] > self.v_registers[y as usize]) as u8;
-                    self.v_registers[x as usize] =
-                        self.v_registers[x as usize].wrapping_sub(self.v_registers[y as usize]);
-                }
-                //8xy6 SHR Vx
-                (8, x, _y, 6) =>
-                {
-                    self.v_registers[0xF] = (self.v_registers[x as usize] & 1 == 1) as u8;
-                    self.v_registers[x as usize] >>= 1;
-                }
-                //8xy7 SUBN Vx, Vy, VF = NOT borrow (overflow)
-                (8, x, y, 7) =>
-                {
-                    self.v_registers[0xF] =
-                        (self.v_registers[y as usize] > self.v_registers[x as usize]) as u8;
-                    self.v_registers[x as usize] =
-                        self.v_registers[y as usize].wrapping_sub(self.v_registers[x as usize]);
-                }
-                //8xyE SHL Vx
-                (8, x, _y, 0xE) =>
-                {
-                    self.v_registers[0xF] = (self.v_registers[x as usize] & 128 == 128) as u8;
-                    self.v_registers[x as usize] <<= 1;
-                }
-                //9xy0 SNE Vx, Vy
-                (9, x, y, 0) =>
-                {
-                    if self.v_registers[x as usize] != self.v_registers[y as usize]
-                        { self.program_counter += 2; }
-                }
-                //Annn LD I, addr
-                (0xA, n1, n2, n3) =>
-                {
-                    self.index = Chip8::get_addr(n1, n2, n3);
-                }
-                //Bnnn JP V0, addr
-                (0xB, n1, n2, n3) =>
-                {
-                    self.program_counter = Chip8::get_addr(n1, n2, n3) + self.v_registers[0x0] as usize;
-                }
-                //Cxkk RND Vx, byte
-                (0xC, x, k1, k2) =>
-                {
-                    self.v_registers[x as usize] =
-                        rand::random::<u8>() & Chip8::get_kk(k1, k2);
-                }
-                //Dxyn DRw Vx, Vy, nibble
-                (0xD, x, y, n) =>
-                {
-                    // Get the x and y values from the v_registers
-                    let initial_x = self.v_registers[x as usize] as usize;
-                    let initial_y = self.v_registers[y as usize] as usize;
+                self.stack_pointer += 1;
+                self.stack[self.stack_pointer] = self.program_counter;
+                self.program_counter = Chip8::get_addr(n1, n2, n3) as usize;
+            }
+            //3xkk SE Vx, byte
+            (3, x, k1, k2) =>
+            {
+                if self.v_registers[x as usize] == Chip8::get_kk(k1, k2)
+                    {self.program_counter += 2;}
+            }
+            //4xkk SNE Vx, byte
+            (4, x, k1, k2) =>
+            {
+                if self.v_registers[x as usize] != Chip8::get_kk(k1, k2)
+                    {self.program_counter += 2;}
+            }
+            //5xy0 SE Vx, Vy
+            (5, x, y, 0) =>
+            {
+                if self.v_registers[x as usize] == self.v_registers[y as usize]
+                    {self.program_counter += 2;}
+            }
+            //6xkk LD Vx, byte
+            (6, x, k1, k2) =>
+            {
+                self.v_registers[x as usize] = Chip8::get_kk(k1, k2);
+            }
+            //7xkk ADD Vx, byte
+            (7, x, k1, k2) =>
+            {
+                self.v_registers[x as usize] =
+                    self.v_registers[x as usize].wrapping_add(Chip8::get_kk(k1, k2));
+            }
+            //8xy0 LD Vx, Vy
+            (8, x, y, 0) =>
+            {
+                self.v_registers[x as usize] = self.v_registers[y as usize];
+            }
+            //8xy1 OR Vx, Vy
+            (8, x, y, 1) =>
+            {
+                self.v_registers[x as usize] |= self.v_registers[y as usize];
+            }
+            //8xy2 AND Vx, Vy
+            (8, x, y, 2) =>
+            {
+                self.v_registers[x as usize] &= self.v_registers[y as usize];
+            }
+            //8xy3 XOR Vx, Vy
+            (8, x, y, 3) =>
+            {
+                self.v_registers[x as usize] ^= self.v_registers[y as usize];
+            }
+            //8xy4 ADD Vx, Vy, VF = carry
+            (8, x, y, 4) =>
+            {
+                let r = self.v_registers[x as usize].overflowing_add(self.v_registers[y as usize]);
+                self.v_registers[x as usize] = r.0;
+                self.v_registers[0xF] = r.1 as u8;
+            }
+            //8xy5 SUB Vx, Vy, VF = NOT borrow (overflow)
+            (8, x, y, 5) =>
+            {
+                self.v_registers[0xF] =
+                    (self.v_registers[x as usize] > self.v_registers[y as usize]) as u8;
+                self.v_registers[x as usize] =
+                    self.v_registers[x as usize].wrapping_sub(self.v_registers[y as usize]);
+            }
+            //8xy6 SHR Vx
+            (8, x, _y, 6) =>
+            {
+                self.v_registers[0xF] = (self.v_registers[x as usize] & 1 == 1) as u8;
+                self.v_registers[x as usize] >>= 1;
+            }
+            //8xy7 SUBN Vx, Vy, VF = NOT borrow (overflow)
+            (8, x, y, 7) =>
+            {
+                self.v_registers[0xF] =
+                    (self.v_registers[y as usize] > self.v_registers[x as usize]) as u8;
+                self.v_registers[x as usize] =
+                    self.v_registers[y as usize].wrapping_sub(self.v_registers[x as usize]);
+            }
+            //8xyE SHL Vx
+            (8, x, _y, 0xE) =>
+            {
+                self.v_registers[0xF] = (self.v_registers[x as usize] & 128 == 128) as u8;
+                self.v_registers[x as usize] <<= 1;
+            }
+            //9xy0 SNE Vx, Vy
+            (9, x, y, 0) =>
+            {
+                if self.v_registers[x as usize] != self.v_registers[y as usize]
+                    { self.program_counter += 2; }
+            }
+            //Annn LD I, addr
+            (0xA, n1, n2, n3) =>
+            {
+                self.index = Chip8::get_addr(n1, n2, n3);
+            }
+            //Bnnn JP V0, addr
+            (0xB, n1, n2, n3) =>
+            {
+                self.program_counter = Chip8::get_addr(n1, n2, n3) + self.v_registers[0x0] as usize;
+            }
+            //Cxkk RND Vx, byte
+            (0xC, x, k1, k2) =>
+            {
+                self.v_registers[x as usize] =
+                    rand::random::<u8>() & Chip8::get_kk(k1, k2);
+            }
+            //Dxyn DRw Vx, Vy, nibble
+            (0xD, x, y, n) =>
+            {
+                // Get the x and y values from the v_registers
+                let initial_x = self.v_registers[x as usize] as usize;
+                let initial_y = self.v_registers[y as usize] as usize;
 
-                    let mut flag: u8 = 0;
+                let mut flag: u8 = 0;
 
-                    // Iterate through rows (index) to (index + n) byte index indicates the byte from
-                    // memory which will drawn
-                    for (y_offset, byte_index) in (self.index..(n as usize + self.index)).enumerate()
+                // Iterate through rows (index) to (index + n) byte index indicates the byte from
+                // memory which will drawn
+                for (y_offset, byte_index) in (self.index..(n as usize + self.index)).enumerate()
+                {
+                    // Iterate through the bits in the sprite byte
+                    let byte = BitIteratoru8::new(self.mem[byte_index]);
+                    for (x_offset, bit) in byte.enumerate()
                     {
-                        // Iterate through the bits in the sprite byte
-                        let byte = BitIteratoru8::new(self.mem[byte_index]);
-                        for (x_offset, bit) in byte.enumerate()
+                        // Adding the offset to the initial coords
+                        let x: usize = (initial_x + x_offset) % C8_SCREEN_WIDTH as usize;
+                        let y: usize = (initial_y + y_offset) % C8_SCREEN_HEIGTH as usize;
+                        // If bits are overlapped, set VF to 1
+                        if self.screen_memory[y][x] & bit
                         {
-                            // Adding the offset to the initial coords
-                            let x: usize = (initial_x + x_offset) % C8_SCREEN_WIDTH as usize;
-                            let y: usize = (initial_y + y_offset) % C8_SCREEN_HEIGTH as usize;
-                            // If bits are overlapped, set VF to 1
-                            if self.screen_memory[y][x] & bit
-                            {
-                                flag = 1;
-                            }
-                            self.screen_memory[y][x] ^= bit;
+                            flag = 1;
                         }
-                    }
-                    self.v_registers[0xF] = flag;
-                    self.draw = true;
-                }
-                //Ex9E SKP Vx
-                (0xE, x, 0x9, 0xE) =>
-                {
-                    if let Some(key) = get_key_from_hexcode(self.v_registers[x as usize])
-                    {
-                        if self.window.is_key_down(key)
-                        {
-                            self.program_counter += 2;
-                        }
-                    }else
-                    {
-                        eprintln!("Instruction: {:X}, Hexcode {:X} in Register: V{:X} doesn't correspond to any key"
-                                    , preinstruction, self.v_registers[x as usize], x);
+                        self.screen_memory[y][x] ^= bit;
                     }
                 }
-                //Ex9E SKNP Vx
-                (0xE, x, 0xA, 0x1) =>
+                self.v_registers[0xF] = flag;
+                self.draw = true;
+            }
+            //Ex9E SKP Vx
+            (0xE, x, 0x9, 0xE) =>
+            {
+                if let Some(key) = get_key_from_hexcode(self.v_registers[x as usize])
                 {
-                    if let Some(key) = get_key_from_hexcode(self.v_registers[x as usize])
+                    if self.window.is_key_down(key)
                     {
-                        if !self.window.is_key_down(key)
-                        {
-                            self.program_counter += 2;
-                        }
-                    }else
-                    {
-                        eprintln!("Instruction: {:X}, Hexcode {:X} in Register: V{:X} doesn't correspond to any key"
-                                    , preinstruction, self.v_registers[x as usize], x);
+                        self.program_counter += 2;
                     }
-                }
-                //Fx07 LD Vx, DT
-                (0xF, x, 0x0, 0x7) =>
+                }else
                 {
-                    self.v_registers[x as usize] = self.dt;
-                }
-                //Fx0A LD Vx, KeyPress
-                (0xF, x, 0x0, 0xA) =>
-                {
-                    self.waiting_for_key = Some(x);
-                }
-                //Fx15 LD DT, Vx
-                (0xF, x, 0x1, 0x5) =>
-                {
-                    self.dt = self.v_registers[x as usize];
-                }
-                //Fx18 LD ST, Vx
-                (0xF, x, 0x1, 0x8) =>
-                {
-                    self.st = self.v_registers[x as usize];
-                }
-                //Fx1E ADD I, Vx
-                (0xF, x, 0x1, 0xE) =>
-                {
-                    self.index = self.index + self.v_registers[x as usize] as usize;
-                }
-                //Fx29 LD F, Vx
-                (0xF, x, 0x2, 0x9) =>
-                {
-                    self.index = self.v_registers[x as usize] as usize * 5;
-                }
-                //Fx33 LD B, Vx
-                (0xF, x, 0x3, 0x3) =>
-                {
-                    let hundreds_digit = self.v_registers[x as usize] / 100;
-                    let tens_digits = (self.v_registers[x as usize] - hundreds_digit * 100) / 10;
-                    let ones_digits = self.v_registers[x as usize] - tens_digits * 10 - hundreds_digit * 100;
-                    self.mem[self.index] = hundreds_digit;
-                    self.mem[self.index + 1] = tens_digits;
-                    self.mem[self.index + 2] = ones_digits;
-                }
-                //Fx55 LD [I]. Vx
-                (0xF, x, 0x5, 0x5) =>
-                {
-                    for i in 0..=x
-                    {
-                        let i = i as usize;
-                        self.mem[i + self.index] = self.v_registers[i];
-                    }
-                }
-                //Fx65 LD Vx, [I]
-                (0xF, x, 0x6, 0x5) =>
-                {
-                    for i in 0..=x
-                    {
-                        let i = i as usize;
-                        self.v_registers[i] = self.mem[i + self.index];
-                    }
-                }
-                _ =>
-                {
-                    bail!(format!("Unrecognized instruction: {:#06X}", preinstruction));
+                    eprintln!("Instruction: {:X}, Hexcode {:X} in Register: V{:X} doesn't correspond to any key"
+                                , preinstruction, self.v_registers[x as usize], x);
                 }
             }
-            Ok(())
-        };
-
-        process_instruction()
-            .chain_err(|| format!("Error executing instruction: {:#06X}", preinstruction))?;
-
+            //Ex9E SKNP Vx
+            (0xE, x, 0xA, 0x1) =>
+            {
+                if let Some(key) = get_key_from_hexcode(self.v_registers[x as usize])
+                {
+                    if !self.window.is_key_down(key)
+                    {
+                        self.program_counter += 2;
+                    }
+                }else
+                {
+                    bail!(format!("Hexcode {:X} in Register: V{:X} doesn't correspond to any key"
+                                , self.v_registers[x as usize], x));
+                }
+            }
+            //Fx07 LD Vx, DT
+            (0xF, x, 0x0, 0x7) =>
+            {
+                self.v_registers[x as usize] = self.dt;
+            }
+            //Fx0A LD Vx, KeyPress
+            (0xF, x, 0x0, 0xA) =>
+            {
+                self.waiting_for_key = Some(x);
+            }
+            //Fx15 LD DT, Vx
+            (0xF, x, 0x1, 0x5) =>
+            {
+                self.dt = self.v_registers[x as usize];
+            }
+            //Fx18 LD ST, Vx
+            (0xF, x, 0x1, 0x8) =>
+            {
+                self.st = self.v_registers[x as usize];
+            }
+            //Fx1E ADD I, Vx
+            (0xF, x, 0x1, 0xE) =>
+            {
+                self.index = self.index + self.v_registers[x as usize] as usize;
+            }
+            //Fx29 LD F, Vx
+            (0xF, x, 0x2, 0x9) =>
+            {
+                self.index = self.v_registers[x as usize] as usize * 5;
+            }
+            //Fx33 LD B, Vx
+            (0xF, x, 0x3, 0x3) =>
+            {
+                let hundreds_digit = self.v_registers[x as usize] / 100;
+                let tens_digits = (self.v_registers[x as usize] - hundreds_digit * 100) / 10;
+                let ones_digits = self.v_registers[x as usize] - tens_digits * 10 - hundreds_digit * 100;
+                self.mem[self.index] = hundreds_digit;
+                self.mem[self.index + 1] = tens_digits;
+                self.mem[self.index + 2] = ones_digits;
+            }
+            //Fx55 LD [I]. Vx
+            (0xF, x, 0x5, 0x5) =>
+            {
+                for i in 0..=x
+                {
+                    let i = i as usize;
+                    self.mem[i + self.index] = self.v_registers[i];
+                }
+            }
+            //Fx65 LD Vx, [I]
+            (0xF, x, 0x6, 0x5) =>
+            {
+                for i in 0..=x
+                {
+                    let i = i as usize;
+                    self.v_registers[i] = self.mem[i + self.index];
+                }
+            }
+            _ =>
+            {
+                bail!("Unrecognized instruction");
+            }
+        }
         Ok(())
     }
 }
